@@ -15,41 +15,49 @@ library(viridis)
 library(plyr)
 library(iNEXT)
 library(tidyverse)
+library(terra)
 
-main.dir <- "~/Dropbox/Projects/Special Projects/Mandai/"
-MandaiTree <- vect(file.path(main.dir, "TreesMPD_202001.shp"))
-MandaiCoords <- read.csv(file.path(main.dir, "MandaiCoordinates.csv"), header = TRUE)
-MandaiInsects <- read_excel(file.path(main.dir, "Mandai_FullSeq_May2019only_Clustered_JP06Mar2024.xlsx"),
+if(Sys.info()[["user"]] == "junyinglim"){
+  main.dir <- "~/Dropbox/Projects/MandaiInsects"
+  data.dir <- file.path(main.dir, "data")  
+  fig.dir <- file.path(main.dir, "figures")  
+}
+
+## GRAPHICAL PARAMETERS ====================
+berkcol3 = c("#003262", "#3B7EA1", "#9BBEA9", "#00B0DA", "#00A598",
+             "#006D2C", "#CFDD45", "#859438", "#FDB515", "#FD8D3C",
+             "#ED4E33", "#C4820E", "#D9661F", "#6C3302")
+
+## IMPORT DATA ====================
+MandaiTree <- vect(file.path(data.dir, "TreesMPD_202001.shp"))
+MandaiCoords <- read.csv(file.path(data.dir, "MandaiCoordinates.csv"), header = TRUE)
+MandaiInsects <- read_excel(file.path(data.dir, "Mandai_FullSeq_May2019only_Clustered_JP06Mar2024.xlsx"),
                             sheet = 2)
 
+# Only analysing data from May
+table(MandaiInsects$`Coll. Date`)
+table(MandaiInsects[,c("trapid", "Coll. Date")])
+table(MandaiInsects$`Trap Type`) 
+
+## PROCESSING DATA ====================
 MandaiCoords$Trap <- paste0("MIS-", MandaiCoords$Trap)
-
-#Removing damaged, conflicted specimens etc
-# MandaiInsects <- subset(MandaiInsects, MandaiInsects$`Order` %in% c("Archaeognatha", "Arachnida" ,"Blattodea", "Coleoptera", "Collembola","Dermaptera","Diptera", "Ephemeroptera",
-#                                                                     "Hemiptera","Hymenoptera", "Lepidoptera","Neuroptera", "Orthoptera", "Psocoptera", "Acari",
-#                                                                     "Mesostigmata", "Thysanoptera", "Trichoptera","Sarcoptiformes","Trombidiformes", "Araneae",
-#                                                                     "Polydesmida","Polyxenida","Myriapoda","Isoptera", "Prostigmata"))
-
-
-
-#MandaiInsects$Date <- as.Date(MandaiInsects$Date)
-
-# # Specify the dates to keep (MAY)
-# dates_to_keep <- as.Date(c("2019-05-01","2019-05-02","2019-05-08", "2019-05-09","2019-05-15", "2019-05-16" ,"2019-05-22","2019-05-23","2019-05-30"))
-# MandaiInsectsMay <- subset(MandaiInsects, Date %in% dates_to_keep)
-# table(MandaiInsectsMay$TrapID)
-
+# Only analyse
 MandaiInsects_MT <- MandaiInsects %>% subset(`Trap Type` == "MT")
 
+table(MandaiInsects_MT[,c("trapid", "Coll. Date")]) # only 6 sites
+
+# Calculate summary statistics for each 
 MandaiInsects_MT_abund <- ddply(.data = MandaiInsects_MT,
                                 .variables = .(trapid),
                                 .fun = summarise,
                                 insect_div = length(unique(`3pClusterID`)),
                                 insect_abund = length(trapid))
 
+# Create site x OTU matrix
 insect_mat <- acast(formula = trapid ~ `3pClusterID`, data = MandaiInsects_MT,
                     fun.aggregate = length, fill = 0)
 
+## SAMPLE RAREFACTION ====================
 raremax <- min(rowSums(insect_mat))
 
 MandaiInsects_MT_div <- data.frame(trapid = rownames(insect_mat),
@@ -57,21 +65,25 @@ MandaiInsects_MT_div <- data.frame(trapid = rownames(insect_mat),
 
 insect_rarefy_curve <- rarecurve(insect_mat, sample = raremax, tidy = TRUE)
 
-
-berkcol3 = c("#003262", "#3B7EA1", "#9BBEA9", "#00B0DA", "#00A598",
-             "#006D2C", "#CFDD45", "#859438", "#FDB515", "#FD8D3C",
-             "#ED4E33", "#C4820E", "#D9661F", "#6C3302")
-ggplot(data = insect_rarefy_curve) + 
+insect_rarefy_curve_plot <- ggplot(data = insect_rarefy_curve) + 
   geom_path(aes(y = Species, x = Sample, color = Site)) + 
-  scale_colour_manual(values = berkcol3[c(1,3, 5, 7, 9, 13)])
+  scale_colour_manual(values = berkcol3[c(1,3, 5, 7, 9, 13)]) +
+  labs(x = "Number of sequenced individuals", y = "Rarefied OTU richness") +
+  coord_fixed()
+ggsave(insect_rarefy_curve_plot, 
+       filename = file.path(fig.dir, "insect_rarefy_curve.png"),
+       width = 5, height = 4)
 
-ggplot(data = MandaiInsects_MT_div) + 
+insect_rarefy_bar_plot <- ggplot(data = MandaiInsects_MT_div) + 
   geom_bar(aes(y = insect_div_rarefy, x = trapid, fill = trapid), stat = "identity") +
-  scale_fill_manual(values = berkcol3[c(1,3, 5, 7, 9, 13)])
+  scale_fill_manual(values = berkcol3[c(1,3, 5, 7, 9, 13)]) + 
+  labs(x = "Trap", y = "Rarefied OTU richness") 
 
-## CALCULATE TREE DIVERSITY
-library(terra)
+ggsave(insect_rarefy_bar_plot, 
+       filename = file.path(fig.dir, "insect_rarefy_bar.png"),
+       width = 5, height = 5)
 
+## CALCULATE TREE DIVERSITY ====================
 MandaiBuffer <- MandaiCoords %>% 
   subset(Trap %in% unique(MandaiInsects_MT$trapid)) %>%
   terra::vect(geom = c("Longitude", "Latitude"), crs = "+proj=longlat +datum=WGS84") %>%
@@ -85,6 +97,7 @@ MandaiTreeClean <- MandaiTree %>%
 
 MandaiTreeBufferIntersect <- terra::relate(MandaiTreeClean, MandaiBuffer, relation = "within")
 
+# Create list of trees in buffer zones around each trap
 TrapTreeBuffer <- list()
 for(i in 1:ncol(MandaiTreeBufferIntersect)){
   # 
@@ -94,6 +107,7 @@ for(i in 1:ncol(MandaiTreeBufferIntersect)){
 TrapTreeBuffer <- TrapTreeBuffer %>% 
   do.call("rbind", .)
 
+# Calculate summary statistics of trees in buffer zones
 MandaiTreeSummary <- ddply(.data = TrapTreeBuffer,
                            .variables = .(trapid),
                            .fun = summarise,
@@ -124,7 +138,7 @@ summary(lm(insect_div_rarefy~ sd_height, data = MandaiDataFinal))
 summary(lm(insect_div_rarefy~ max_height, data = MandaiDataFinal))
 summary(lm(scale(insect_div_rarefy)~ scale(n_trees), data = MandaiDataFinal))
 
-#summary(lm(insect_div_rarefy~ sd_dbh, data = MandaiDataFinal))
+
 
 target.col <- c("tree_div_rarefy", "sd_height", "max_height", "n_trees")
 
@@ -143,24 +157,41 @@ res <- data.frame("Variable" = target.col,
                   "Confint_upper" = confint_upp,
                   "Confint_lower" = confint_lwr)
 
-ggplot(data = res) + geom_point(aes(y = Variable, x = Coefficient)) +
+# Relationship between rarefied insect diversity and plant and vegetation variables
+insect_plant_relate_plot <- ggplot(data = res) + geom_point(aes(y = Variable, x = Coefficient)) +
   geom_errorbarh(aes(xmin = Confint_lower, xmax = Confint_upper, y = Variable), linewidth = 0.5, height = 0) +
   geom_vline(aes(xintercept = 0), linetype = "dashed", colour = "red", size = 1) +
   scale_x_continuous(breaks = round(seq(-1.8, 1.8, 0.6), 1), limits = c(-1.8, 1.8))
 
-## CALCULATE DISSIMILARITIES
+ggsave(insect_plant_relate_plot,
+       filename = file.path(fig.dir, "insect_plant_relate.png"),
+       width = 5, height = 5)
+
+## CALCULATE DISSIMILARITIES ====================
+# Define function to calculate dissimilarities
 calc_dissim <- function(x){
   vegdist(x, method = "bray") %>% 
     as.matrix() %>%
     melt()
 }
 
+
+# Calculate raw insect dissimilarities
 insect_raw_dist <- calc_dissim(insect_mat)
 
-ggplot(data = insect_raw_dist) + 
+insect_raw_diss_plot <- ggplot(data = insect_raw_dist) + 
   geom_tile(aes(y = Var1, x = Var2, fill = value)) + 
-  scale_fill_viridis()
-  
+  scale_fill_viridis() +
+  coord_fixed() + 
+  scale_y_discrete(expand = c(0,0)) +
+  scale_x_discrete(expand = c(0,0)) +
+  theme(legend.position = "bottom")
+
+ggsave(insect_raw_diss_plot, 
+       filename = file.path(fig.dir, "insect_raw_diss.png"),
+       width = 5, height = 5)
+
+# Perform dissimilarities of 100 rarefied insect matrices
 insect_mat_random <- list()
 for(i in 1:100){
   insect_mat_random[[i]] <- rrarefy(insect_mat, sample = raremax)  
@@ -170,11 +201,19 @@ insect_random_dist <- lapply(insect_mat_random, FUN = calc_dissim) %>%
   do.call("rbind", .) %>%
   ddply(.variables = .(Var1, Var2), .fun = summarise, mean_insect_dissim = mean(value))
 
-ggplot(data = insect_random_dist) + 
+insect_rarefy_diss_plot <- ggplot(data = insect_random_dist) + 
   geom_tile(aes(y = Var1, x = Var2, fill = mean_insect_dissim)) + 
-  scale_fill_viridis()
+  scale_fill_viridis() +
+  coord_fixed() +
+  scale_y_discrete(expand = c(0,0)) +
+  scale_x_discrete(expand = c(0,0)) +
+  theme(legend.position = "bottom")
 
-# Dissimilarity to veg stats
+ggsave(insect_rarefy_diss_plot, 
+       filename = file.path(fig.dir, "insect_rarefy_diss.png"),
+       width = 5, height = 5)
+
+# Calculate dissimilarities of 100 veg matrices
 tree_mat_random <- list()
 for(i in 1:100){
   tree_mat_random[[i]] <- rrarefy(MandaiTreeMat, sample = treemin)
@@ -209,11 +248,12 @@ MandaiDataCompFinal <- veg_dist %>%
   left_join(geog_dist, by = c("Var1", "Var2"))
 
 
-
 insect_plant_dissim <- ggplot(data = MandaiDataCompFinal) + 
   geom_point(aes(y = mean_insect_dissim, x = mean_plant_dissim)) +
   labs(x = "Tree community dissimilarity", y = "Insect community dissimilarity")
-
+ggsave(insect_plant_dissim,
+       filename = file.path(fig.dir, "insect_plant_dissim.png"),
+       width = 5, height = 5)
 
 mantel(xdis = acast(Var1 ~ Var2, data = insect_random_dist),
        ydis = acast(Var1 ~ Var2, data = tree_random_dist))
@@ -227,6 +267,9 @@ mantel.partial(xdis = acast(Var1 ~ Var2, data = insect_random_dist),
 insect_geog_dissim <- ggplot(data = MandaiDataCompFinal) + 
   geom_point(aes(y = mean_insect_dissim, x = geog_dist)) +
   labs(x = "Geographic distance", y = "Insect community dissimilarity")
+ggsave(insect_geog_dissim,
+       filename = file.path(fig.dir, "insect_geog_dissim.png"),
+       width = 5, height = 5)
 
 mod <- lm(mean_insect_dissim ~ mean_plant_dissim + geog_dist, data = MandaiDataCompFinal)
 crPlot(mod, variable = "mean_plant_dissim")
